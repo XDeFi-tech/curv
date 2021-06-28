@@ -1,5 +1,5 @@
 [package]
-name = "curv"
+name = "curv-kzen"
 version = "0.7.0"
 edition = "2018"
 authors = ["Omer Shlomovits"]
@@ -13,7 +13,7 @@ crate-type = ["lib"]
 [dependencies]
 blake2b_simd = "0.5.7"
 cryptoxide = "0.1.2"
-curve25519-dalek = "1.2.3"
+curve25519-dalek = "3.1.0"
 derivative = "2.2"
 digest = "0.8.1"
 ff-zeroize = "0.6.3"
@@ -21,14 +21,16 @@ funty = "=1.1.0"
 generic-array = "0.14"
 hex = "0.4"
 hmac = "0.7.1"
-merkle-sha3 = "^0.1"
+# merkle-sha3 = "^0.1"
+merkle = "1.1.0"
+ring = "0.16.20"
 lazy_static = "1.4.0"
 num-traits = "0.2"
 num-integer = "0.1"
 pairing-plus = "0.19"
 rand = "0.6"
 ring-algorithm = "0.2.3"
-rust-crypto = "^0.2"
+# rust-crypto = "^0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 sha2 = "0.8.0"
@@ -38,6 +40,7 @@ zeroize = "1"
 rust-gmp-kzen = { version = "0.5", features = ["serde_support"], optional = true }
 num-bigint = { version = "0.4", features = ["serde"], optional = true }
 
+# libsecp256k1 = "0.3.2"
 [dependencies.secp256k1]
 version = "0.20"
 features = ["serde", "rand-std"]

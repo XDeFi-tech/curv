@@ -9,7 +9,7 @@
 
 use std::marker::PhantomData;
 
-use crypto::sha3::Sha3;
+use ring::digest::{Algorithm, SHA256};
 use merkle::{MerkleTree, Proof};
 
 use crate::elliptic::curves::traits::ECPoint;
@@ -24,10 +24,12 @@ pub struct MT256<P> {
     _ph: PhantomData<P>,
 }
 
+// #[allow(non_upper_case_globals)]
+static DIGEST: &'static Algorithm = &SHA256;
+
 //impl <'a> MT256<'a>{
 impl<P: ECPoint> MT256<P> {
     pub fn create_tree(vec: &[P]) -> MT256<P> {
-        let digest = Sha3::keccak256();
         let mut array = [0u8; 32];
         let vec_bytes = (0..vec.len())
             .map(|i| {
@@ -36,7 +38,7 @@ impl<P: ECPoint> MT256<P> {
                 array
             })
             .collect::<Vec<[u8; 32]>>();
-        let tree = MerkleTree::from_vec::<[u8; 32]>(digest, vec_bytes);
+        let tree = MerkleTree::from_vec(DIGEST, vec_bytes);
 
         MT256 {
             tree,
@@ -48,7 +50,7 @@ impl<P: ECPoint> MT256<P> {
         let mut array = [0u8; 32];
         let pk_slice = value.pk_to_key_slice();
         array.copy_from_slice(&pk_slice[0..32]);
-        MerkleTree::gen_proof::<[u8; 32]>(&self.tree, array).expect("not found in tree")
+        MerkleTree::gen_proof(&self.tree, array).expect("not found in tree")
     }
 
     pub fn get_root(&self) -> &Vec<u8> {
@@ -57,7 +59,7 @@ impl<P: ECPoint> MT256<P> {
 
     #[allow(clippy::result_unit_err)]
     pub fn validate_proof(proof: &Proof<[u8; 32]>, root: &[u8]) -> Result<(), ()> {
-        if Proof::validate::<[u8; 32]>(proof, root) {
+        if Proof::validate(proof, root) {
             Ok(())
         } else {
             Err(())
