@@ -6,6 +6,9 @@
     License MIT: <https://github.com/KZen-networks/curv/blob/master/LICENSE>
 */
 
+use std::convert::{TryFrom, TryInto};
+use std::iter;
+
 use serde::{Deserialize, Serialize};
 
 use crate::arithmetic::traits::*;
@@ -112,25 +115,24 @@ where
     }
 
     // returns vector of coefficients
+    #[deprecated(since = "0.7.1", note = "please use Polynomial::sample instead")]
     pub fn sample_polynomial(t: usize, coef0: &P::Scalar) -> Vec<P::Scalar> {
-        let mut coefficients = vec![coef0.clone()];
-        // sample the remaining coefficients randomly using secure randomness
-        let random_coefficients: Vec<P::Scalar> = (0..t).map(|_| ECScalar::new_random()).collect();
-        coefficients.extend(random_coefficients);
-        // return
-        coefficients
+        Polynomial::<P>::sample(t.try_into().unwrap(), coef0.clone()).coefficients
     }
 
+    #[deprecated(
+        since = "0.7.1",
+        note = "please use Polynomial::evaluate_many_bigint instead"
+    )]
     pub fn evaluate_polynomial(coefficients: &[P::Scalar], index_vec: &[usize]) -> Vec<P::Scalar> {
-        (0..index_vec.len())
-            .map(|point| {
-                let point_bn = BigInt::from(index_vec[point] as u32);
-
-                VerifiableSS::<P>::mod_evaluate_polynomial(coefficients, ECScalar::from(&point_bn))
-            })
-            .collect()
+        Polynomial::<P> {
+            coefficients: coefficients.to_vec(),
+        }
+        .evaluate_many_bigint(index_vec.into_iter().map(|&i| u64::try_from(i).unwrap()))
+        .collect()
     }
 
+    #[deprecated(since = "0.7.1", note = "please use Polynomial::evaluate instead")]
     pub fn mod_evaluate_polynomial(coefficients: &[P::Scalar], point: P::Scalar) -> P::Scalar {
         // evaluate using Horner's rule
         //  - to combine with fold we consider the coefficients in reverse order
@@ -267,6 +269,78 @@ where
         });
         let denum = denum.invert();
         num * denum
+    }
+}
+
+/// Polynomial of some degree `n`
+///
+/// Polynomial has a form: `f(x) = a_n * x^n + a_(n-1) * x^(n-1) + ... + a_1 * x^1 + a_0`.
+///
+/// Coefficients `a_i` and indeterminate `x` are scalars in curve prime field,
+/// their type is `ECScalar`.
+pub struct Polynomial<P: ECPoint> {
+    coefficients: Vec<P::Scalar>,
+}
+
+impl<P> Polynomial<P>
+where
+    P: ECPoint,
+    P::Scalar: Clone,
+{
+    /// Samples random polynomial of degree `n` with fixed coefficient `a_0 = coef0`
+    ///
+    /// ## Example
+    /// ```rust
+    /// # use curv::cryptographic_primitives::secret_sharing::feldman_vss::Polynomial;
+    /// # use curv::elliptic::curves::secp256_k1::GE as Secp256k1;
+    /// # use curv::elliptic::curves::traits::ECScalar;
+    /// let coef0: Secp256k1::Scalar = ECScalar::new_random();
+    /// let polynomial = Polynomial::<Secp256k1>::sample(3, coef0);
+    /// assert_eq!(polynomial.evaluate(0), coef0);
+    /// ```
+    pub fn sample(n: u16, coef0: P::Scalar) -> Self {
+        let random_coefficients = iter::repeat_with(|| ECScalar::new_random()).take(usize::from(n));
+        Polynomial {
+            coefficients: iter::once(coef0).chain(random_coefficients).collect(),
+        }
+    }
+
+    /// Takes scalar `x` and evaluates `f(x)`
+    pub fn evaluate(&self, point_x: &P::Scalar) -> P::Scalar {
+        let reversed_coefficients = self.coefficients.iter().rev();
+        reversed_coefficients.fold(P::Scalar::zero(), |partial, coef| {
+            let partial_times_point_x = partial * point_x.clone();
+            partial_times_point_x + coef.clone()
+        })
+    }
+
+    /// Takes point `x` that's convertable to BigInt, and evaluates `f(x)`
+    pub fn evaluate_bigint<B>(&self, point_x: B) -> P::Scalar
+    where
+        BigInt: From<B>,
+    {
+        self.evaluate(&<P::Scalar as ECScalar>::from(&BigInt::from(point_x)))
+    }
+
+    /// Takes list of points `xs` and returns iterator over `f(xs[i])`
+    pub fn evaluate_many<'i, I>(&'i self, points_x: I) -> impl Iterator<Item = P::Scalar> + 'i
+    where
+        I: IntoIterator<Item = &'i P::Scalar> + 'i,
+    {
+        points_x.into_iter().map(move |x| self.evaluate(x))
+    }
+
+    /// Takes a list of points `xs` that are convertable to BigInt, and returns iterator over
+    /// `f(xs[i])`.
+    pub fn evaluate_many_bigint<'i, B, I>(
+        &'i self,
+        points_x: I,
+    ) -> impl Iterator<Item = P::Scalar> + 'i
+    where
+        I: IntoIterator<Item = B> + 'i,
+        BigInt: From<B>,
+    {
+        points_x.into_iter().map(move |x| self.evaluate_bigint(x))
     }
 }
 
