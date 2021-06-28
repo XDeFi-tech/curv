@@ -41,22 +41,27 @@ where
         self.parameters.threshold + 1
     }
 
+    // TODO: share should accept u16 rather than usize
     // generate VerifiableSS from a secret
     pub fn share(t: usize, n: usize, secret: &P::Scalar) -> (VerifiableSS<P>, Vec<P::Scalar>) {
         assert!(t < n);
-        let poly = VerifiableSS::<P>::sample_polynomial(t, secret);
-        let index_vec: Vec<usize> = (1..=n).collect();
-        let secret_shares = VerifiableSS::<P>::evaluate_polynomial(&poly, &index_vec);
+        let t = u16::try_from(t).unwrap();
+        let n = u16::try_from(n).unwrap();
+
+        let poly = Polynomial::<P>::sample(t, secret.clone());
+        let secret_shares = poly.evaluate_many_bigint(1..=n).collect();
 
         let G: P = ECPoint::generator();
-        let commitments = (0..poly.len())
-            .map(|i| G.clone() * poly[i].clone())
+        let commitments = poly
+            .coefficients()
+            .iter()
+            .map(|coef| G.clone() * coef.clone())
             .collect::<Vec<P>>();
         (
             VerifiableSS {
                 parameters: ShamirSecretSharing {
-                    threshold: t,
-                    share_count: n,
+                    threshold: t.into(),
+                    share_count: n.into(),
                 },
                 commitments,
             },
@@ -66,16 +71,19 @@ where
 
     // takes given VSS and generates a new VSS for the same secret and a secret shares vector to match the new commitments
     pub fn reshare(&self) -> (VerifiableSS<P>, Vec<P::Scalar>) {
+        // TODO: ShamirSecretSharing::{threshold, share_count} should be u16 rather than usize
+        let t = u16::try_from(self.parameters.threshold).unwrap();
+        let n = u16::try_from(self.parameters.share_count).unwrap();
+
         let one: P::Scalar = ECScalar::from(&BigInt::one());
-        let poly = VerifiableSS::<P>::sample_polynomial(self.parameters.threshold, &one);
-        let index_vec: Vec<usize> = (1..=self.parameters.share_count).collect();
-        let secret_shares_biased = VerifiableSS::<P>::evaluate_polynomial(&poly, &index_vec);
+        let poly = Polynomial::<P>::sample(t, one.clone());
+        let secret_shares_biased: Vec<_> = poly.evaluate_many_bigint(1..=n).collect();
         let secret_shares: Vec<_> = (0..secret_shares_biased.len())
             .map(|i| secret_shares_biased[i].sub(&one.get_element()))
             .collect();
         let G: P = ECPoint::generator();
         let mut new_commitments = vec![self.commitments[0].clone()];
-        for (poly, commitment) in poly.iter().zip(&self.commitments).skip(1) {
+        for (poly, commitment) in poly.coefficients().iter().zip(&self.commitments).skip(1) {
             new_commitments.push((G.clone() * poly.clone()) + commitment.clone())
         }
         (
@@ -95,18 +103,25 @@ where
         index_vec: &[usize],
     ) -> (VerifiableSS<P>, Vec<P::Scalar>) {
         assert_eq!(n, index_vec.len());
-        let poly = VerifiableSS::<P>::sample_polynomial(t, secret);
-        let secret_shares = VerifiableSS::<P>::evaluate_polynomial(&poly, index_vec);
+        // TODO: share_at_indices should accept u16 rather than usize (t, n, index_vec)
+        let t = u16::try_from(t).unwrap();
+        let n = u16::try_from(n).unwrap();
+        let index_vec = index_vec.into_iter().map(|&i| u16::try_from(i).unwrap());
+
+        let poly = Polynomial::<P>::sample(t, secret.clone());
+        let secret_shares = poly.evaluate_many_bigint(index_vec).collect();
 
         let G: P = ECPoint::generator();
-        let commitments = (0..poly.len())
-            .map(|i| G.clone() * poly[i].clone())
+        let commitments = poly
+            .coefficients()
+            .iter()
+            .map(|coef| G.clone() * coef.clone())
             .collect::<Vec<P>>();
         (
             VerifiableSS {
                 parameters: ShamirSecretSharing {
-                    threshold: t,
-                    share_count: n,
+                    threshold: t.into(),
+                    share_count: n.into(),
                 },
                 commitments,
             },
@@ -292,11 +307,11 @@ where
     /// ## Example
     /// ```rust
     /// # use curv::cryptographic_primitives::secret_sharing::feldman_vss::Polynomial;
-    /// # use curv::elliptic::curves::secp256_k1::GE as Secp256k1;
     /// # use curv::elliptic::curves::traits::ECScalar;
-    /// let coef0: Secp256k1::Scalar = ECScalar::new_random();
-    /// let polynomial = Polynomial::<Secp256k1>::sample(3, coef0);
-    /// assert_eq!(polynomial.evaluate(0), coef0);
+    /// use curv::elliptic::curves::p256::{GE, FE};
+    /// let coef0: FE = ECScalar::new_random();
+    /// let polynomial = Polynomial::<GE>::sample(3, coef0);
+    /// assert_eq!(polynomial.evaluate(&FE::zero()), coef0);
     /// ```
     pub fn sample(n: u16, coef0: P::Scalar) -> Self {
         let random_coefficients = iter::repeat_with(|| ECScalar::new_random()).take(usize::from(n));
@@ -307,8 +322,12 @@ where
 
     /// Takes scalar `x` and evaluates `f(x)`
     pub fn evaluate(&self, point_x: &P::Scalar) -> P::Scalar {
-        let reversed_coefficients = self.coefficients.iter().rev();
-        reversed_coefficients.fold(P::Scalar::zero(), |partial, coef| {
+        let mut reversed_coefficients = self.coefficients.iter().rev();
+        let head = reversed_coefficients
+            .next()
+            .expect("at least one coefficient is guaranteed to be present");
+        let tail = reversed_coefficients;
+        tail.fold(head.clone(), |partial, coef| {
             let partial_times_point_x = partial * point_x.clone();
             partial_times_point_x + coef.clone()
         })
@@ -341,6 +360,39 @@ where
         BigInt: From<B>,
     {
         points_x.into_iter().map(move |x| self.evaluate_bigint(x))
+    }
+
+    /// Returns degree of polynomial
+    ///
+    /// ```rust
+    /// # use curv::cryptographic_primitives::secret_sharing::feldman_vss::Polynomial;
+    /// # use curv::elliptic::curves::traits::ECScalar;
+    /// use curv::elliptic::curves::secp256_k1::{GE, FE};
+    /// let coef0: FE = ECScalar::new_random();
+    /// let polynomial = Polynomial::<GE>::sample(3, coef0.clone());
+    /// assert_eq!(polynomial.degree(), 3);
+    /// ```
+    pub fn degree(&self) -> u16 {
+        let len =
+            u16::try_from(self.coefficients.len()).expect("degree guaranteed to fit into u16");
+        len - 1
+    }
+
+    /// Returns list of polynomial coefficients `a`: `a[i]` corresponds to coefficient `a_i` of
+    /// polynomial `f(x) = ... + a_i * x^i + ...`
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// # use curv::cryptographic_primitives::secret_sharing::feldman_vss::Polynomial;
+    /// # use curv::elliptic::curves::traits::ECScalar;
+    /// use curv::elliptic::curves::secp256_k1::{GE, FE};
+    /// let coef0: FE = ECScalar::new_random();
+    /// let polynomial = Polynomial::<GE>::sample(3, coef0.clone());
+    /// assert_eq!(polynomial.coefficients()[0], coef0);
+    /// ```
+    pub fn coefficients(&self) -> &[P::Scalar] {
+        &self.coefficients
     }
 }
 
